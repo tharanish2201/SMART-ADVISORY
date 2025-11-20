@@ -7,7 +7,7 @@ import sys
 ACCOUNT_SID = "ACaa2fa6b1d38ad241d20b9e85887301f2"
 AUTH_TOKEN = "60777c114ab55ca3279940052e7f32fb"
 FROM_NUMBER = "+19047504962"   # Twilio number
-TO_NUMBER = "+91XXXXXXXXXX"    # Your verified phone number
+TO_NUMBER = "+919488848836"    # Your verified phone number
 
 client = Client(ACCOUNT_SID, AUTH_TOKEN)
 
