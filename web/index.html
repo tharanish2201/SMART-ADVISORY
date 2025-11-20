@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>SmartAgri Advisor — Advanced with SMS Alerts</title>
+
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+  #map { height: 260px; width: 100%; }
+  .chip { display:inline-block; padding:6px 10px; border-radius:999px; background:#f1f5f9; font-size:12px; margin:2px; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+
+<div class="max-w-7xl mx-auto p-6">
+  <header class="flex items-center justify-between mb-6">
+    <h1 class="text-2xl font-semibold">SmartAgri Advisor — Advanced (with SMS)</h1>
+    <div id="meta" class="text-sm text-slate-600">Initializing…</div>
+  </header>
+
+  <main class="grid grid-cols-12 gap-6">
+    <section class="col-span-8">
+      <div class="grid grid-cols-4 gap-4 mb-4">
+        <div class="bg-white rounded-lg p-3 shadow">
+          <div class="text-xs text-slate-500">Temperature</div>
+          <div id="card-temp" class="text-2xl font-semibold mt-1">-- °C</div>
+        </div>
+        <div class="bg-white rounded-lg p-3 shadow">
+          <div class="text-xs text-slate-500">Humidity</div>
+          <div id="card-hum" class="text-2xl font-semibold mt-1">-- %</div>
+        </div>
+        <div class="bg-white rounded-lg p-3 shadow">
+          <div class="text-xs text-slate-500">Soil Moisture</div>
+          <div id="card-soil" class="text-2xl font-semibold mt-1">-- %</div>
+        </div>
+        <div class="bg-white rounded-lg p-3 shadow">
+          <div class="text-xs text-slate-500">Crop Health Score</div>
+          <div id="card-health" class="text-2xl font-semibold mt-1">--</div>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-lg p-4 shadow mb-4">
+        <h2 class="font-medium mb-2">Last 100 Records</h2>
+        <canvas id="chart" style="height:260px"></canvas>
+      </div>
+
+      <div class="bg-white rounded-lg p-4 shadow">
+        <h2 class="font-medium mb-2">Field Map</h2>
+        <div id="map"></div>
+      </div>
+    </section>
+
+    <aside class="col-span-4 space-y-4">
+      <div class="bg-white rounded-lg p-4 shadow">
+        <h2 class="font-medium mb-2">Smart Advisories</h2>
+        <div id="advice" class="space-y-3 text-sm text-slate-700">Loading…</div>
+      </div>
+
+      <div class="bg-white rounded-lg p-4 shadow">
+        <h2 class="font-medium mb-2">Advanced Modules</h2>
+        <div id="modules" class="text-sm text-slate-700 space-y-2">
+          <div id="fertilizer" class="p-2 border rounded">Fertilizer: —</div>
+          <div id="pest" class="p-2 border rounded">Pest/Disease: —</div>
+          <div id="waterreq" class="p-2 border rounded">Water Req: —</div>
+          <div id="yield" class="p-2 border rounded">Yield Prediction: —</div>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-lg p-4 shadow">
+        <h2 class="font-medium mb-2">Sensor Feed (last 10)</h2>
+        <div class="overflow-auto">
+          <table class="w-full text-left text-sm">
+            <thead class="text-slate-500 text-xs"><tr><th>Time</th><th>Temp</th><th>Hum</th><th>Soil</th></tr></thead>
+            <tbody id="feed"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-lg p-4 shadow">
+        <h2 class="font-medium mb-2">Field Info</h2>
+        <label class="block mb-2">City:
+          <input id="city" type="text" class="border p-1 rounded w-full" value="Chennai" />
+        </label>
+        <label class="block mb-2">Soil Type:
+          <select id="soilType" class="border p-1 rounded w-full">
+            <option value="loamy">Loamy</option>
+            <option value="clay">Clay</option>
+            <option value="sandy">Sandy</option>
+          </select>
+        </label>
+        <label class="block mb-2">Crop Type:
+          <select id="cropType" class="border p-1 rounded w-full">
+            <option value="rice">Rice</option>
+            <option value="wheat">Wheat</option>
+            <option value="tomato">Tomato</option>
+            <option value="maize">Maize</option>
+          </select>
+        </label>
+        <label class="block mb-1">Crop Growth Stage:
+          <select id="growthStage" class="border p-1 rounded w-full">
+            <option value="vegetative">Vegetative</option>
+            <option value="flowering">Flowering</option>
+            <option value="fruiting">Fruiting</option>
+            <option value="harvest">Harvest</option>
+          </select>
+        </label>
+        <div class="text-xs text-slate-500 mt-2">Tip: change city/soil/crop to update advisories.</div>
+      </div>
+    </aside>
+  </main>
+
+  <footer class="mt-6 text-xs text-slate-500">SmartAgri Advisor — Advanced Modules + SMS</footer>
+</div>
+
+<script>
+/* ====== CONFIG ====== */
+const CHANNEL_ID = "3169156";
+const READ_API_KEY = "D6G87GC56AN3CSSO";
+const WEATHER_API_KEY = "b176c324fde140b08ed43652251811";
+const POLL_MS = 15000; // 15s (ThingSpeak limit)
+const SMS_API_ENDPOINT = "http://localhost:5000/sms"; // your local SMS backend
+/* ==================== */
+
+let map, marker, chart;
+
+/* crop profiles */
+const cropProfiles = {
+  rice:   {idealSoil:'loamy', minSoil:50, maxSoil:90, maxTemp:35, minTemp:20, kc:0.9, waterNeed:6},
+  wheat:  {idealSoil:'loamy', minSoil:40, maxSoil:70, maxTemp:30, minTemp:15, kc:0.6, waterNeed:4},
+  tomato: {idealSoil:'sandy', minSoil:45, maxSoil:80, maxTemp:32, minTemp:18, kc:0.7, waterNeed:5},
+  maize:  {idealSoil:'loamy', minSoil:40, maxSoil:75, maxTemp:34, minTemp:18, kc:0.8, waterNeed:5}
+};
+
+/* helpers (map, chart, ui) */
+function initMap(lat=11.0, lon=78.0){
+  map = L.map('map').setView([lat, lon], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+  marker = L.marker([lat, lon]).addTo(map);
+}
+
+function initChart(){
+  const ctx = document.getElementById('chart').getContext('2d');
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [
+      { label: 'Temperature (°C)', data: [], borderColor: '#e11d48', tension: 0.2, yAxisID:'y' },
+      { label: 'Humidity (%)', data: [], borderColor: '#06b6d4', tension: 0.2, yAxisID:'y2' },
+      { label: 'Soil (%)', data: [], borderColor: '#f97316', tension: 0.2, yAxisID:'y3' }
+    ]},
+    options: {
+      responsive: true,
+      interaction: { mode:'index', intersect:false },
+      scales:{ y:{ position:'left' }, y2:{ position:'right', grid:{ drawOnChartArea:false } }, y3:{ display:false } }
+    }
+  });
+}
+
+function updateCards(latest){
+  document.getElementById('card-temp').textContent = latest.temperature.toFixed(1) + ' °C';
+  document.getElementById('card-hum').textContent = latest.humidity.toFixed(0) + ' %';
+  document.getElementById('card-soil').textContent = latest.soil.toFixed(0) + ' %';
+  document.getElementById('meta').textContent = `Updated: ${new Date(latest.timestamp).toLocaleString()}`;
+  if(marker) {
+    marker.setLatLng([latest.lat, latest.lon]);
+    marker.bindPopup(`Latest — Temp: ${latest.temperature.toFixed(1)}°C<br>Soil: ${latest.soil.toFixed(0)}%`).openPopup();
+    map.setView([latest.lat, latest.lon]);
+  }
+}
+
+function updateFeed(history){
+  const feed = document.getElementById('feed'); feed.innerHTML = '';
+  const rows = history.slice(-10).reverse();
+  for(const h of rows){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="py-2">${new Date(h.timestamp).toLocaleTimeString()}</td>
+                    <td>${h.temperature.toFixed(1)}°C</td>
+                    <td>${h.humidity.toFixed(0)}%</td>
+                    <td>${h.soil.toFixed(0)}%</td>`;
+    feed.appendChild(tr);
+  }
+}
+
+function updateChart(history){
+  if(!chart) return;
+  chart.data.labels = history.map(h => new Date(h.timestamp).toLocaleTimeString());
+  chart.data.datasets[0].data = history.map(h => h.temperature);
+  chart.data.datasets[1].data = history.map(h => h.humidity);
+  chart.data.datasets[2].data = history.map(h => h.soil);
+  chart.update();
+}
+
+/* ===== weather ===== */
+async function fetchWeather(city){
+  try{
+    const res = await fetch(`https://api.openweathermap.org/data/2.5/forecast?q=${encodeURIComponent(city)}&appid=${WEATHER_API_KEY}&units=metric`);
+    if(!res.ok) throw new Error('weather error '+res.status);
+    const data = await res.json();
+    const now = Date.now();
+    const next24 = data.list.filter(l => (new Date(l.dt_txt).getTime() - now) <= 24*3600*1000);
+    let rain24 = 0, humAvg = 0, tempAvg = 0;
+    next24.forEach(item => {
+      humAvg += item.main.humidity;
+      tempAvg += item.main.temp;
+      if(item.rain && item.rain['3h']) rain24 += item.rain['3h'];
+    });
+    const count = Math.max(next24.length,1);
+    return {temp: tempAvg/count, humidity: humAvg/count, rain: rain24};
+  }catch(e){ console.warn('Weather fetch error',e); return {temp:0,humidity:0,rain:0}; }
+}
+
+/* ===== SMS helper (frontend) =====
+  - Debounce done with localStorage to avoid duplicate SMS spam.
+  - Adjust debounce hours as needed.
+*/
+function canSendSms(key, cooldownHours){
+  try{
+    const last = localStorage.getItem(key);
+    if(!last) return true;
+    const lastTime = new Date(last).getTime();
+    return (Date.now() - lastTime) > cooldownHours * 3600 * 1000;
+  }catch(e){ return true; }
+}
+function recordSmsSent(key){
+  try{ localStorage.setItem(key, new Date().toISOString()); }catch(e){}
+}
+
+async function sendSMSAlert(message){
+  // quick guard
+  if(!SMS_API_ENDPOINT) return;
+  try{
+    await fetch(SMS_API_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: message })
+    });
+    console.log("SMS requested:", message);
+  }catch(e){ console.error("SMS send error:", e); }
+}
+
+/* ===== Advanced modules (fertilizer, pest, water, yield, health) ===== */
+/* (same functions as previous full dashboard) */
+
+function fertilizerRecommendation(cropType, growthStage, soilType, latest){
+  const base = {
+    rice:   {N:30,P:15,K:15},
+    wheat:  {N:40,P:20,K:20},
+    tomato: {N:40,P:40,K:60},
+    maize:  {N:50,P:25,K:25}
+  }[cropType] || {N:20,P:10,K:10};
+
+  let stageFactor = 1;
+  if(growthStage === 'vegetative') stageFactor = 1.2;
+  else if(growthStage === 'flowering') stageFactor = 1.1;
+  else if(growthStage === 'fruiting') stageFactor = 1.0;
+  else if(growthStage === 'harvest') stageFactor = 0.6;
+
+  const moisture = latest.soil;
+  let note = '';
+  if(moisture < 30) note = 'Soil very dry — avoid heavy N application until moisture improves.';
+
+  const N = Math.round(base.N * stageFactor);
+  const P = Math.round(base.P * stageFactor);
+  const K = Math.round(base.K * stageFactor);
+
+  return {text:`Apply approx N:${N}kg/acre, P:${P}kg/acre, K:${K}kg/acre. ${note}`, values:{N,P,K}};
+}
+
+function pestDiseaseRisk(cropType, latest, weather){
+  const risks = [];
+  const t = latest.temperature, h = latest.humidity, rain = weather.rain;
+
+  if(cropType === 'rice'){
+    let p = 0.0;
+    if(h > 80) p += 0.4;
+    if(t >= 25 && t <= 32) p += 0.3;
+    if(rain > 5) p += 0.2;
+    risks.push({disease:'Rice blast',prob:Math.min(0.99,p),advice:'Ensure good drainage; avoid dense canopy; apply fungicide if symptoms appear.'});
+  }
+  if(cropType === 'tomato'){
+    let p = 0.0;
+    if(h > 75) p += 0.35;
+    if(t > 30) p += 0.2;
+    if(rain > 4) p += 0.25;
+    risks.push({disease:'Late blight / fungal',prob:Math.min(0.99,p),advice:'Remove infected leaves, ensure airflow, consider copper fungicide.'});
+  }
+  if(cropType === 'wheat'){
+    let p = 0.0;
+    if(h > 80) p += 0.4;
+    if(t >= 10 && t <= 25) p += 0.25;
+    risks.push({disease:'Wheat rust',prob:Math.min(0.99,p),advice:'Monitor rust pustules; consider resistant varieties and fungicide.'});
+  }
+  if(cropType === 'maize'){
+    let p = 0.0;
+    if(t > 28) p += 0.2;
+    if(h > 70) p += 0.2;
+    risks.push({disease:'Stem borer / foliar disease',prob:Math.min(0.9,p),advice:'Check for larvae; use pheromone traps and biological controls.'});
+  }
+  return risks;
+}
+
+function waterRequirementPrediction(cropType, soilType, latest, weather, history){
+  const profile = cropProfiles[cropType] || {waterNeed:5, kc:0.7};
+  const soilFactor = soilType === 'sandy' ? 1.2 : soilType === 'clay' ? 0.8 : 1.0;
+  const recent = history.slice(-5);
+  const slope = (recent.length > 1) ? (recent[recent.length-1].soil - recent[0].soil) / recent.length : 0;
+  const base_mm = profile.waterNeed * soilFactor;
+  const rain = weather.rain || 0;
+  const adjusted_mm = Math.max(0, base_mm - rain);
+  const liters_per_m2 = adjusted_mm;
+  let suggestion = '';
+  if(latest.soil < profile.minSoil) suggestion = 'Irrigate soon — below crop threshold.';
+  else if(slope < -2) suggestion = 'Soil drying fast — consider irrigation within 12 hours.';
+  else suggestion = 'Soil OK — next irrigation as per schedule.';
+  return {mmPerDay: adjusted_mm.toFixed(1), litersPerM2: liters_per_m2.toFixed(1), suggestion};
+}
+
+function yieldPrediction(cropType, latest, history, weather){
+  const baseYield = {rice:3000, wheat:2500, tomato:15000, maize:3500}[cropType] || 2000;
+  const profile = cropProfiles[cropType] || {minSoil:40, maxTemp:35, minTemp:12};
+  const moistureFactor = Math.max(0.6, Math.min(1.1, latest.soil / Math.max(profile.minSoil,1)));
+  const tempFactor = (latest.temperature <= profile.maxTemp && latest.temperature >= profile.minTemp) ? 1.0 : 0.85;
+  const risks = pestDiseaseRisk(cropType, latest, weather);
+  const diseaseProb = risks.reduce((s,r)=>s + r.prob, 0) / Math.max(risks.length,1);
+  const diseaseFactor = 1 - diseaseProb * 0.4;
+  const predicted = baseYield * moistureFactor * tempFactor * diseaseFactor;
+  const lower = Math.round(predicted * 0.9);
+  const upper = Math.round(predicted * 1.05);
+  return {range:`${lower} - ${upper} kg/ha`, details:{baseYield,moistureFactor:moistureFactor.toFixed(2),tempFactor,diseaseProb: diseaseProb.toFixed(2)}};
+}
+
+function cropHealthScore(cropType, latest, weather, history){
+  const profile = cropProfiles[cropType] || {minSoil:40};
+  let score = 100;
+  if(latest.soil < profile.minSoil) score -= Math.min(40, (profile.minSoil - latest.soil) * 1.5);
+  if(latest.temperature > profile.maxTemp) score -= 20;
+  if(latest.temperature < profile.minTemp) score -= 15;
+  if(latest.humidity > 85 || weather.humidity > 85) score -= 15;
+  const recent = history.slice(-5);
+  const slope = (recent.length>1) ? (recent[recent.length-1].soil - recent[0].soil) : 0;
+  if(slope < -5) score -= 10;
+  score = Math.max(0, Math.round(score));
+  return score;
+}
+
+/* compose advisories and trigger SMS where required
+   Debounce keys:
+    - 'sms_soil_alert' cooldown 6 hours
+    - 'sms_irrigation_alert' cooldown 1 hour
+*/
+async function composeAdvisories(latest, history){
+  const city = document.getElementById('city').value;
+  const soilType = document.getElementById('soilType').value;
+  const cropType = document.getElementById('cropType').value;
+  const growthStage = document.getElementById('growthStage').value;
+  const weather = await fetchWeather(city);
+
+  const fert = fertilizerRecommendation(cropType, growthStage, soilType, latest);
+  const pestRisks = pestDiseaseRisk(cropType, latest, weather);
+  const waterReq = waterRequirementPrediction(cropType, soilType, latest, weather, history);
+  const yieldPred = yieldPrediction(cropType, latest, history, weather);
+  const health = cropHealthScore(cropType, latest, weather, history);
+
+  document.getElementById('fertilizer').innerHTML = `<strong>Fertilizer:</strong> ${fert.text}`;
+  const pestBlock = pestRisks.map(r => `<div class="mb-1"><strong>${r.disease}:</strong> ${(r.prob*100).toFixed(0)}% — ${r.advice}</div>`).join('');
+  document.getElementById('pest').innerHTML = `<strong>Pest/Disease:</strong> ${pestBlock || 'No major risks'}`;
+  document.getElementById('waterreq').innerHTML = `<strong>Water:</strong> ${waterReq.suggestion} • ${waterReq.mmPerDay} mm/day (~${waterReq.litersPerM2} L/m²)`;
+  document.getElementById('yield').innerHTML = `<strong>Yield Prediction:</strong> ${yieldPred.range}`;
+
+  document.getElementById('card-health').textContent = health + ' / 100';
+
+  const adv = [];
+  const profile = cropProfiles[cropType] || {minSoil:40};
+  let soilAdj = (soilType === 'sandy') ? -5 : (soilType === 'clay') ? 5 : 0;
+  const effectiveSoil = latest.soil + soilAdj;
+
+  // --- Soil low alert (send SMS, debounced 6 hours) ---
+  if(effectiveSoil < profile.minSoil && weather.rain < 2){
+    const smsKey = 'sms_soil_alert';
+    if(canSendSms(smsKey, 6)){
+      const msg = `ALERT: Low Soil Moisture\nCity: ${city}\nCrop: ${cropType}\nSoil: ${latest.soil}% (adj ${effectiveSoil}%)\nAction: Irrigate immediately.`;
+      sendSMSAlert(msg);
+      recordSmsSent(smsKey);
+    }
+    adv.push({title:'Irrigation Needed', detail:`Soil ${latest.soil}% (adj ${effectiveSoil}%) below threshold (${profile.minSoil}%). Suggested ${waterReq.mmPerDay} mm.`});
+  }
+
+  // next predicted irrigation (send SMS if due now and debounced 1 hour)
+  const nextIrr = predictNextIrrigation(latest, history, cropType, soilType, weather);
+  if(nextIrr){
+    adv.push({title:'Next Predicted Irrigation', detail:`Predicted: ${nextIrr.toLocaleString()}`});
+    const now = new Date();
+    if(now >= nextIrr){
+      const smsKey = 'sms_irrigation_alert';
+      if(canSendSms(smsKey, 1)){
+        const msg = `IRRIGATION DUE\nCity: ${city}\nCrop: ${cropType}\nPredicted irrigation at: ${nextIrr.toLocaleString()}\nAction: Irrigate now.`;
+        sendSMSAlert(msg);
+        recordSmsSent(smsKey);
+      }
+    }
+  }
+
+  pestRisks.forEach(r => { if(r.prob > 0.3) adv.push({title:`${r.disease} risk`, detail:`Prob ${(r.prob*100).toFixed(0)}% — ${r.advice}`}); });
+  if(latest.temperature > profile.maxTemp) adv.push({title:'Heat Stress', detail:`Temp ${latest.temperature.toFixed(1)}°C — consider shading/mulch.`});
+  if(latest.temperature < profile.minTemp) adv.push({title:'Cold Stress', detail:`Temp ${latest.temperature.toFixed(1)}°C — protect vulnerable plants.`});
+
+  adv.push({title:'Fertilizer Recommendation', detail: fert.text});
+  updateAdvice(adv);
+}
+
+/* Predictive irrigation (same as before) */
+function predictNextIrrigation(latest, history, cropType, soilType, weather){
+  const profile = cropProfiles[cropType];
+  if(!profile) return null;
+  const recent = history.slice(-6);
+  const n = recent.length;
+  if(n < 2) return null;
+  const slope = (recent[n-1].soil - recent[0].soil) / Math.max(1, n-1);
+  const soilSlopeAdj = soilType === 'sandy' ? -0.5 : soilType === 'clay' ? 0.4 : 0;
+  const adjustedSlope = slope + soilSlopeAdj;
+  if(adjustedSlope >= 0) return null;
+  const gap = latest.soil - profile.minSoil;
+  if(latest.soil <= profile.minSoil) return new Date();
+  const readingsUntil = gap / Math.abs(adjustedSlope);
+  const secondsPerReading = POLL_MS / 1000;
+  const secondsUntil = readingsUntil * secondsPerReading;
+  const next = new Date(Date.now() + Math.max(0, secondsUntil*1000));
+  if(weather.rain > 2) next.setHours(next.getHours() + 6);
+  return next;
+}
+
+/* ===== ThingSpeak fetch (fixed) ===== */
+async function fetchThingSpeakHistory(){
+  try{
+    const url = `https://api.thingspeak.com/channels/${CHANNEL_ID}/feeds.json?api_key=${READ_API_KEY}&results=100&status=true`;
+    const res = await fetch(url);
+    if(!res.ok) throw new Error('ThingSpeak history fetch failed: ' + res.status);
+    const data = await res.json();
+    if(!data.feeds || data.feeds.length === 0) {
+      console.warn('ThingSpeak: no history feeds returned');
+      return [];
+    }
+    const history = data.feeds.map(f => {
+      return {
+        temperature: parseFloat(f.field1 || 'NaN') || 0,
+        humidity: parseFloat(f.field2 || 'NaN') || 0,
+        soil: parseFloat(f.field3 || 'NaN') || 0,
+        timestamp: f.created_at,
+        lat: parseFloat(f.field4) || 11.0,
+        lon: parseFloat(f.field5) || 78.0
+      };
+    });
+    updateFeed(history);
+    updateChart(history);
+    return history;
+  }catch(e){
+    console.error('fetchThingSpeakHistory', e);
+    return [];
+  }
+}
+
+async function fetchThingSpeakLatest(){
+  try{
+    const latestUrl = `https://api.thingspeak.com/channels/${CHANNEL_ID}/feeds/last.json?api_key=${READ_API_KEY}`;
+    const latestRes = await fetch(latestUrl);
+    if(!latestRes.ok) throw new Error('ThingSpeak latest fetch failed: ' + latestRes.status);
+    const f = await latestRes.json();
+    const history = await fetchThingSpeakHistory();
+    const latest = {
+      temperature: parseFloat(f.field1 || 'NaN') || 0,
+      humidity: parseFloat(f.field2 || 'NaN') || 0,
+      soil: parseFloat(f.field3 || 'NaN') || 0,
+      timestamp: f.created_at || new Date().toISOString(),
+      lat: parseFloat(f.field4) || (history[history.length-1]?.lat || 11.0),
+      lon: parseFloat(f.field5) || (history[history.length-1]?.lon || 78.0)
+    };
+    updateCards(latest);
+    await composeAdvisories(latest, history);
+    updateAlerts(latest, history);
+  }catch(e){
+    console.error('fetchThingSpeakLatest', e);
+  }
+}
+
+/* active alerts (UI) */
+function updateAlerts(latest, history){
+  const alerts = [];
+  if(latest.soil < 20) alerts.push('CRITICAL: Soil moisture very low (<20%). Immediate irrigation needed.');
+  if(latest.temperature > 40) alerts.push('CRITICAL: Extremely high temperature (>40°C). Protect crops.');
+  const el = document.getElementById('alerts');
+  el.innerHTML = '';
+  if(alerts.length===0) el.innerHTML = '<li class="text-slate-500">No active alerts.</li>';
+  alerts.forEach(a => {
+    const li = document.createElement('li');
+    li.className = 'bg-red-50 p-2 rounded';
+    li.textContent = a;
+    el.appendChild(li);
+  });
+}
+
+/* INIT */
+document.addEventListener('DOMContentLoaded', async () => {
+  initMap();
+  initChart();
+  await fetchThingSpeakLatest();
+  setInterval(fetchThingSpeakLatest, POLL_MS);
+});
+</script>
+</body>
+</html>
+
